@@ -94,18 +94,81 @@ pub mod pallet {
 			duration: T::BlockNumber,
 			target: AccountIdOf<T>,
 		) -> DispatchResult {
+			let who = ensure_signed(origin)?;
+
+			// check if something is already locked
+			ensure!(
+				AmountLocked::<T>::get() == BalanceOf::<T>::from(0u32),
+				Error::<T>::AlreadyLocked
+			);
+			// store hash in storage
+			LockHash::<T>::put(hash);
+			// store amount in storage
+			AmountLocked::<T>::put(amount);
+
+			// lock the funds with duration specified
+			// T::Currency::set_lock(EXAMPLE_ID, &who, amount, WithdrawReasons::all());
+
+			// or transfer to pallet's account where it is automatically locked
+			T::Assets::transfer(T::Dot::get(), &who, &Self::account_id(), amount, false)?;
+			// set minimum block number
+			MinBlockToCancel::<T>::put(frame_system::Pallet::<T>::block_number() + duration);
+
+			// emit event
+			Self::deposit_event(Event::LockedCoin { who, amount });
 			Ok(())
 		}
 
 		#[pallet::call_index(2)]
 		#[pallet::weight(10_000)]
 		pub fn unlock(origin: OriginFor<T>, secret: Vec<u8>) -> DispatchResult {
+			let who = ensure_signed(origin)?;
+
+			// SHA256 hash of the secret
+			let hash = hashing::blake2_256(&secret.encode());
+			if hash == LockHash::<T>::get() {
+				// unlock the funds
+				T::Assets::transfer(
+					T::Eth::get(),
+					&Self::account_id(),
+					&who,
+					AmountLocked::<T>::get(),
+					false,
+				)?;
+			} else {
+				return Err(Error::<T>::HashDoesNotMatchError.into());
+			}
+			//set amount locked
+			AmountLocked::<T>::put(BalanceOf::<T>::from(0u32));
+
+			// emit event
+			Self::deposit_event(Event::UnlockedCoin { who });
 			Ok(())
 		}
 
 		#[pallet::call_index(3)]
 		#[pallet::weight(10_000)]
 		pub fn cancel(origin: OriginFor<T>) -> DispatchResult {
+			let who = ensure_signed(origin)?;
+			//check if the block number is greater than the minimum block number
+			ensure!(
+				frame_system::Pallet::<T>::block_number() > MinBlockToCancel::<T>::get(),
+				Error::<T>::GenericError
+			);
+
+			// unlock the funds
+			T::Assets::transfer(
+				T::Dot::get(),
+				&Self::account_id(),
+				&who,
+				AmountLocked::<T>::get(),
+				false,
+			)?;
+			//set amount locked
+			AmountLocked::<T>::put(BalanceOf::<T>::from(0u32));
+
+			// emit event
+			Self::deposit_event(Event::Cancelled { who });
 			Ok(())
 		}
 	}
@@ -113,7 +176,7 @@ pub mod pallet {
 	impl<T: Config> Pallet<T> {
 		/// The account ID of the Pallet
 		pub fn account_id() -> T::AccountId {
-			T::PalletId::get().into_account_truncating()
+			T::PalletId::get().into_account_truncating() // transfer funds to this
 		}
 	}
 }
